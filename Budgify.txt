@@ -1,0 +1,688 @@
+import React, { useState } from "react";
+import { createRoot } from "react-dom/client";
+
+type SavingsGoal = {
+  id: number;
+  name: string;
+  target: string;
+  period: "monthly" | "yearly";
+};
+
+type Inputs = {
+  salary: string;
+  payday: string;
+  rent: string;
+  transport: string;
+  food: string;
+  family: string;
+  debt: string;
+  personal: string;
+};
+
+const empty: Inputs = {
+  salary: "", payday: "monthly", rent: "", transport: "", food: "",
+  family: "", debt: "", personal: "",
+};
+
+function goalMonthly(g: SavingsGoal) {
+  const t = Number(g.target) || 0;
+  return g.period === "yearly" ? Math.round(t / 12) : t;
+}
+
+function payPeriodsPerMonth(schedule: string) {
+  if (schedule === "weekly") return 52 / 12;
+  if (schedule === "semi-monthly") return 2;
+  return 1;
+}
+
+type Expense = {
+  id: number;
+  amount: number;
+  description: string;
+  category: string;
+  timestamp: Date;
+};
+
+const CATEGORIES = ["Food", "Transport", "Shopping", "Bills", "Family", "Emergency", "Other"];
+
+function peso(n: number) {
+  return "₱" + n.toLocaleString("en-PH", { maximumFractionDigits: 0 });
+}
+
+function timeAgo(d: Date) {
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return d.toLocaleDateString("en-PH", { month: "short", day: "numeric" });
+}
+
+function scale(n: number, period: "monthly" | "yearly") {
+  return period === "yearly" ? n * 12 : n;
+}
+
+function App() {
+  const [inputs, setInputs] = useState<Inputs>(empty);
+  const [goals, setGoals] = useState<SavingsGoal[]>([
+    { id: 1, name: "", target: "", period: "monthly" },
+  ]);
+  const [budget, setBudget] = useState<null | ReturnType<typeof makeBudget>>(null);
+  const [viewPeriod, setViewPeriod] = useState<"monthly" | "yearly">("monthly");
+  const [chatInput, setChatInput] = useState("");
+  const [chatLog, setChatLog] = useState<{ role: "user" | "ai"; text: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expAmount, setExpAmount] = useState("");
+  const [expDesc, setExpDesc] = useState("");
+  const [expCategory, setExpCategory] = useState(CATEGORIES[0]);
+  const [expError, setExpError] = useState("");
+
+  function update(field: keyof Inputs, value: string) {
+    setInputs({ ...inputs, [field]: value } as Inputs);
+  }
+
+  function updateGoal(id: number, field: keyof SavingsGoal, value: string) {
+    setGoals((list) => list.map((g) => (g.id === id ? { ...g, [field]: value } : g)));
+  }
+
+  function addGoal() {
+    setGoals((list) => [...list, { id: Date.now(), name: "", target: "", period: "monthly" }]);
+  }
+
+  function removeGoal(id: number) {
+    setGoals((list) => (list.length > 1 ? list.filter((g) => g.id !== id) : list));
+  }
+
+  const monthlySavingsTarget = goals.reduce((sum, g) => sum + goalMonthly(g), 0);
+
+  const perPeriodSalary = Number(inputs.salary) || 0;
+  const monthlySalary = Math.round(perPeriodSalary * payPeriodsPerMonth(inputs.payday));
+
+  function makeBudget(i: Inputs) {
+    const salary = Math.round((Number(i.salary) || 0) * payPeriodsPerMonth(i.payday));
+    const fixed = (Number(i.rent) || 0) + (Number(i.transport) || 0) + (Number(i.food) || 0) +
+      (Number(i.family) || 0) + (Number(i.debt) || 0);
+    const personal = Number(i.personal) || 0;
+    const targetSavings = monthlySavingsTarget;
+
+    const idealSavings = Math.round(salary * 0.2);
+    const idealWants = Math.round(salary * 0.3);
+    const idealNeeds = Math.round(salary * 0.5);
+    const needsSoFar = fixed;
+    const remainingAfterNeeds = salary - needsSoFar - personal;
+
+    // Respect the user's actual savings goal as long as it's affordable.
+    // Only fall back to the 20% "ideal" if they didn't set a goal at all.
+    const desiredSavings = targetSavings > 0 ? targetSavings : idealSavings;
+    const suggestedSavings = Math.max(Math.min(desiredSavings, Math.max(remainingAfterNeeds, 0)), 0);
+    const wantsLimit = Math.max(remainingAfterNeeds - suggestedSavings, 0);
+    const totalPlanned = fixed + personal + suggestedSavings;
+    const leftover = salary - totalPlanned;
+
+    const needsPct = salary > 0 ? Math.round((fixed / salary) * 100) : 0;
+    const savingsPct = salary > 0 ? Math.round((suggestedSavings / salary) * 100) : 0;
+    const wantsPct = salary > 0 ? Math.round((wantsLimit / salary) * 100) : 0;
+    const needsExceedHalf = needsPct > 50;
+    const savingsShortfall = targetSavings > 0 && suggestedSavings < targetSavings
+      ? targetSavings - suggestedSavings
+      : 0;
+
+    return {
+      salary, fixed, personal, suggestedSavings, wantsLimit, totalPlanned, leftover, idealSavings, idealWants, idealNeeds,
+      needsPct, savingsPct, wantsPct, needsExceedHalf, savingsShortfall, targetSavings,
+    };
+  }
+
+  function handleGenerate() {
+    setBudget(makeBudget(inputs));
+  }
+
+  function handleReset() {
+    setInputs(empty);
+    setGoals([{ id: Date.now(), name: "", target: "", period: "monthly" }]);
+    setBudget(null);
+    setViewPeriod("monthly");
+    setExpenses([]);
+    setExpAmount("");
+    setExpDesc("");
+    setExpCategory(CATEGORIES[0]);
+    setExpError("");
+    setChatLog([]);
+    setChatInput("");
+  }
+
+  function handleAddExpense() {
+    const amt = Number(expAmount);
+    if (!amt || amt <= 0) {
+      setExpError("Enter a valid amount first 👆");
+      return;
+    }
+    setExpError("");
+    setExpenses((list) => [
+      { id: Date.now(), amount: amt, description: expDesc.trim() || "(no note)", category: expCategory, timestamp: new Date() },
+      ...list,
+    ]);
+    setExpAmount("");
+    setExpDesc("");
+  }
+
+  function handleDeleteExpense(id: number) {
+    setExpenses((list) => list.filter((e) => e.id !== id));
+  }
+
+  const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const wantsRemaining = budget ? budget.wantsLimit - totalSpent : 0;
+
+  async function handleChatSend() {
+    if (!chatInput.trim() || !budget) return;
+    const userMsg = chatInput.trim();
+    setChatLog((l) => [...l, { role: "user", text: userMsg }]);
+    setChatInput("");
+    setLoading(true);
+    try {
+      const context = `User's monthly budget context:
+- Monthly take-home salary: ${peso(budget.salary)}
+- Payday schedule: ${inputs.payday === "semi-monthly" ? "twice a month (15th & 30th)" : inputs.payday} (entered as ${peso(perPeriodSalary)} per payday)
+- Rent/utilities: ${peso(Number(inputs.rent) || 0)}
+- Transportation: ${peso(Number(inputs.transport) || 0)}
+- Food/groceries: ${peso(Number(inputs.food) || 0)}
+- Money sent to family: ${peso(Number(inputs.family) || 0)}
+- Debt/commitments: ${peso(Number(inputs.debt) || 0)}
+- Personal spending/subscriptions budgeted: ${peso(Number(inputs.personal) || 0)}
+- Savings goals: ${goals.filter((g) => Number(g.target) > 0).length === 0 ? "none specified" : goals.filter((g) => Number(g.target) > 0).map((g) => `${g.name || "unnamed goal"} — ${peso(Number(g.target) || 0)} per ${g.period === "yearly" ? "year" : "month"} (≈ ${peso(goalMonthly(g))}/month)`).join("; ")}
+- Total combined monthly savings target across all goals: ${peso(monthlySavingsTarget)}
+- Suggested monthly savings: ${peso(budget.suggestedSavings)}
+- Suggested wants/nonessential limit: ${peso(budget.wantsLimit)}
+- Total planned expenses: ${peso(budget.totalPlanned)}
+- Remaining/leftover after plan: ${peso(budget.leftover)}
+- Logged expenses so far this period: ${expenses.length === 0 ? "none yet" : expenses.map((e) => `${peso(e.amount)} on ${e.category} (${e.description}, ${timeAgo(e.timestamp)})`).join("; ")}
+- Total spent so far (from logged expenses): ${peso(totalSpent)}
+- Wants/nonessential budget remaining after logged spending: ${peso(wantsRemaining)}`;
+
+      const { response } = await complete([
+        {
+          role: "user",
+          content: [
+            {
+              text: `You are Budgify, a warm, non-judgmental personal budget buddy helping a Filipino fresh graduate manage their first salary. Use simple language, Philippine pesos (₱), and a friendly tone with occasional emojis. Keep responses SHORT (3-6 sentences max).
+
+${context}
+
+The user just said: "${userMsg}"
+
+Tasks based on what they said:
+- If it's an expense log (e.g. "I spent ₱180 on lunch"), identify amount, description, and category, then briefly explain how it affects their budget (e.g., remaining wants budget). Remind them they can also use the "Log an expense" box above to track it properly.
+- If they ask "can I afford X", assess using ONLY the numbers given above (including logged expenses so far). Do not invent missing info — if something's missing, ask for it.
+- If they ask about surviving until payday, estimate a daily/weekly limit using their remaining wants budget (after logged spending) and mention if more info (days left) is needed, and give a friendly warning if spending looks too high.
+- Otherwise, just respond helpfully as a budgeting coach.
+
+Reply directly to the user in second person, no preamble.`,
+            },
+          ],
+        },
+      ]);
+      setChatLog((l) => [...l, { role: "ai", text: response }]);
+    } catch (e) {
+      setChatLog((l) => [...l, { role: "ai", text: "Oops, something went wrong. Try again? 🙏" }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="top-clearance bottom-clearance min-h-screen bg-amber-50 px-4 flex flex-col items-center">
+      <div className="w-full max-w-2xl">
+        <h1 className="text-3xl sm:text-4xl font-bold text-amber-800 mb-1">💸 Budgify</h1>
+        <p className="text-amber-700 mb-6 sm:mb-8 text-sm sm:text-base">
+          Your personal Budget Buddy. Make every peso count!
+        </p>
+
+        {/* Input Form */}
+        <div className="bg-white rounded-xl shadow-md p-4 sm:p-6 mb-6">
+          <h2 className="text-xl font-semibold text-amber-800 mb-4">📋 Tell me about your money</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                💰 Take-home salary <span className="text-gray-400">(per payday, below)</span>
+              </label>
+              <input
+                type="number"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                placeholder="25000"
+                value={inputs.salary}
+                onChange={(e) => update("salary", e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">📅 Payday schedule</label>
+              <select
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                value={inputs.payday}
+                onChange={(e) => update("payday", e.target.value)}
+              >
+                <option value="weekly">Weekly</option>
+                <option value="semi-monthly">Twice a month (15th & 30th)</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </div>
+          </div>
+          {perPeriodSalary > 0 && inputs.payday !== "monthly" && (
+            <p className="text-xs text-amber-700 mt-2">
+              📌 That's <strong>{peso(perPeriodSalary)}</strong> every {inputs.payday === "weekly" ? "week" : "15th & 30th"} ≈{" "}
+              <strong>{peso(monthlySalary)} per month</strong> — we'll use this monthly total in your budget.
+            </p>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+            <Field label="🏠 Rent & utilities" value={inputs.rent} onChange={(v) => update("rent", v)} placeholder="0" hint="Include your share only if split with family/roommates. Phone/internet bills: put here if bundled with utilities, or under Personal below if it's your own separate plan." />
+            <Field label="🚍 Transportation" value={inputs.transport} onChange={(v) => update("transport", v)} placeholder="0" />
+            <Field label="🍚 Food & groceries" value={inputs.food} onChange={(v) => update("food", v)} placeholder="0" />
+            <Field label="👨‍👩‍👧 Money sent to family" value={inputs.family} onChange={(v) => update("family", v)} placeholder="0" hint="Regular support you send home. If you live with family and just chip in for rent/bills, put that under Rent & utilities instead." />
+            <Field label="💳 Debt & other commitments" value={inputs.debt} onChange={(v) => update("debt", v)} placeholder="0" />
+            <Field label="🎮 Personal spending/subscriptions" value={inputs.personal} onChange={(v) => update("personal", v)} placeholder="0" hint="Your recurring personal costs: phone plan, streaming, gym, etc. This is a FIXED monthly budget — not the same as 'Shopping' expenses you'll log later, which come out of your Wants limit." />
+          </div>
+
+          <div className="mt-3 text-xs sm:text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-3">
+            🤔 <strong>Not sure where something goes?</strong> Simple rule: if it's the SAME amount every month (rent, phone plan, subscription), put it in one of the fields above. If it VARIES day to day (lunch out, a Grab ride, impulse buy), don't enter it here — log it later in the "Log an expense" tracker instead.
+          </div>
+
+          <div className="mt-5">
+            <label className="block text-sm font-medium text-gray-700 mb-1">🎯 Savings goals (add as many as you like)</label>
+            <div className="space-y-2">
+              {goals.map((g, idx) => (
+                <div key={g.id} className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    placeholder={idx === 0 ? "e.g. Emergency fund" : "e.g. New laptop"}
+                    value={g.name}
+                    onChange={(e) => updateGoal(g.id, "name", e.target.value)}
+                  />
+                  <input
+                    type="number"
+                    className="w-full sm:w-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    placeholder="e.g. 60000"
+                    value={g.target}
+                    onChange={(e) => updateGoal(g.id, "target", e.target.value)}
+                  />
+                  <select
+                    className="px-2 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm"
+                    value={g.period}
+                    onChange={(e) => updateGoal(g.id, "period", e.target.value)}
+                  >
+                    <option value="monthly">per month</option>
+                    <option value="yearly">per year</option>
+                  </select>
+                  <button
+                    onClick={() => removeGoal(g.id)}
+                    aria-label={`Remove savings goal ${g.name || idx + 1}`}
+                    className="px-3 py-2 text-gray-400 hover:text-red-500 transition"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={addGoal}
+              className="mt-2 text-sm text-amber-700 hover:text-amber-800 font-medium"
+            >
+              ➕ Add another goal
+            </button>
+            {monthlySavingsTarget > 0 && (
+              <p className="text-xs text-amber-700 mt-2">
+                📌 Combined, that's about <strong>{peso(monthlySavingsTarget)} per month</strong> across all goals — we'll use this in your budget.
+              </p>
+            )}
+          </div>
+
+          <div className="mt-3 text-xs sm:text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
+            💡 <strong>Tip:</strong> pick whichever period is easier to think in per goal. Saving <strong>₱60,000 this year</strong>?
+            Choose "per year" and type 60000 — we'll automatically work out the ₱5,000/month for you.
+          </div>
+          <div className="mt-4 flex flex-col sm:flex-row gap-2">
+            <button
+              onClick={handleGenerate}
+              className="w-full sm:w-auto px-6 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition font-medium"
+            >
+              ✨ Generate my budget
+            </button>
+            <button
+              onClick={handleReset}
+              className="w-full sm:w-auto px-6 py-2.5 bg-white text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition font-medium"
+            >
+              🔄 Reset to defaults
+            </button>
+          </div>
+        </div>
+
+        {/* Budget Output */}
+        {budget && (
+          <div className="bg-white rounded-xl shadow-md p-4 sm:p-6 mb-6">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <h2 className="text-xl font-semibold text-amber-800">📊 Your Personalized Budget</h2>
+              <div className="inline-flex rounded-lg border border-amber-200 overflow-hidden text-sm">
+                <button
+                  onClick={() => setViewPeriod("monthly")}
+                  aria-label="View budget per month"
+                  className={`px-3 py-1.5 font-medium transition ${viewPeriod === "monthly" ? "bg-amber-600 text-white" : "bg-white text-amber-700 hover:bg-amber-50"}`}
+                >
+                  Monthly
+                </button>
+                <button
+                  onClick={() => setViewPeriod("yearly")}
+                  aria-label="View budget per year"
+                  className={`px-3 py-1.5 font-medium transition ${viewPeriod === "yearly" ? "bg-amber-600 text-white" : "bg-white text-amber-700 hover:bg-amber-50"}`}
+                >
+                  Yearly
+                </button>
+              </div>
+            </div>
+            {viewPeriod === "yearly" && (
+              <p className="text-xs text-gray-500 mb-4">📌 Showing estimated totals for 12 months, based on your monthly budget below.</p>
+            )}
+
+            <div className="mb-4 text-xs sm:text-sm text-gray-600 bg-gray-50 rounded-lg p-3 space-y-1.5">
+              <p className="font-medium text-gray-700">💡 Quick terms, explained simply:</p>
+              <p>
+                <strong>Needs</strong> = money that MUST go out every month (rent, food, transport, family, debt). Yours: <strong>{peso(budget.fixed)}</strong>.
+              </p>
+              <p>
+                <strong>Wants</strong> = money for things you enjoy but could live without (eating out, shopping, hobbies). Your safe limit: <strong>{peso(budget.wantsLimit)}</strong>.
+              </p>
+              <p>
+                <strong>Savings</strong> = money set aside before you spend it, for emergencies or goals. Yours: <strong>{peso(budget.suggestedSavings)}</strong>.
+              </p>
+              <p>
+                <strong>50/30/20 rule</strong> = a popular starting split of your income: 50% needs, 30% wants, 20% savings. We nudged these percentages using YOUR actual bills above, not just the raw rule.
+              </p>
+            </div>
+
+            <div className="space-y-2 text-sm sm:text-base">
+              <Row label={viewPeriod === "yearly" ? "Total yearly income" : "Total monthly income"} value={peso(scale(budget.salary, viewPeriod))} bold />
+              <Row label="Fixed expenses (rent, transport, food, family, debt)" value={peso(scale(budget.fixed, viewPeriod))} />
+              <Row label="Personal spending/subscriptions" value={peso(scale(budget.personal, viewPeriod))} />
+              <Row label="Suggested savings" value={peso(scale(budget.suggestedSavings, viewPeriod))} highlight="green" />
+              <Row label="Recommended wants/nonessential limit" value={peso(scale(budget.wantsLimit, viewPeriod))} highlight="blue" />
+              <hr className="my-2" />
+              <Row label="Total planned expenses" value={peso(scale(budget.totalPlanned, viewPeriod))} bold />
+              <Row label="Remaining / leftover" value={peso(scale(budget.leftover, viewPeriod))} highlight={budget.leftover >= 0 ? "green" : "red"} bold />
+            </div>
+
+            <div className="mt-5">
+              <p className="text-sm font-medium text-gray-700 mb-3">🚦 How you're doing</p>
+              <div className="space-y-2">
+                <StatusLine label="Needs" actualPct={budget.needsPct} idealPct={50} actualAmt={scale(budget.fixed, viewPeriod)} goodDirection="lower" />
+                <StatusLine label="Wants" actualPct={budget.wantsPct} idealPct={30} actualAmt={scale(budget.wantsLimit, viewPeriod)} goodDirection="lower" />
+                <StatusLine label="Savings" actualPct={budget.savingsPct} idealPct={20} actualAmt={scale(budget.suggestedSavings, viewPeriod)} goodDirection="higher" />
+              </div>
+
+              <details className="mt-3 text-xs text-gray-500">
+                <summary className="cursor-pointer hover:text-gray-700">See exact numbers & the 50/30/20 rule</summary>
+                <div className="mt-2 space-y-2.5">
+                  <CompareBar label="Needs" idealPct={50} actualPct={budget.needsPct} idealAmt={scale(budget.idealNeeds, viewPeriod)} actualAmt={scale(budget.fixed, viewPeriod)} color="amber" />
+                  <CompareBar label="Wants" idealPct={30} actualPct={budget.wantsPct} idealAmt={scale(budget.idealWants, viewPeriod)} actualAmt={scale(budget.wantsLimit, viewPeriod)} color="blue" />
+                  <CompareBar label="Savings" idealPct={20} actualPct={budget.savingsPct} idealAmt={scale(budget.idealSavings, viewPeriod)} actualAmt={scale(budget.suggestedSavings, viewPeriod)} color="green" />
+                </div>
+              </details>
+            </div>
+            <p className="mt-4 text-sm text-amber-700 bg-amber-50 rounded-lg p-3">
+              📝 Using the 50/30/20 rule as a base (50% needs, 30% wants, 20% savings), I adjusted it to fit your actual
+              bills and goals. Right now you're at roughly <strong>{budget.needsPct}% needs</strong>, <strong>{budget.wantsPct}% wants</strong>, and <strong>{budget.savingsPct}% savings</strong>.
+              {budget.leftover < 0 && " ⚠️ Your planned expenses go over your income — let's chat below about where to cut back."}
+              {budget.leftover >= 0 && !budget.needsExceedHalf && budget.savingsShortfall === 0 && " You're on track! Keep that wants spending within the limit above and you'll hit your savings goal. 🎉"}
+            </p>
+            {budget.needsExceedHalf && (
+              <p className="mt-3 text-sm text-red-700 bg-red-50 rounded-lg p-3">
+                ⚠️ <strong>Your needs are {budget.needsPct}% of your income</strong> — above the 50% "ideal."
+                That's not unusual for a first salary, but it means less room for wants and savings until your needs shrink (e.g. cheaper rent/commute) or your income grows.
+              </p>
+            )}
+            {budget.savingsShortfall > 0 && (
+              <p className="mt-3 text-sm text-red-700 bg-red-50 rounded-lg p-3">
+                ⚠️ You wanted to save <strong>{peso(budget.targetSavings)}/month</strong>, but after needs and personal spending, only <strong>{peso(budget.suggestedSavings)}/month</strong> is actually available.
+                You're short by <strong>{peso(budget.savingsShortfall)}</strong> — consider trimming needs/personal costs or adjusting your goal.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Expense Tracker */}
+        {budget && (
+          <div className="bg-white rounded-xl shadow-md p-4 sm:p-6 mb-6">
+            <h2 className="text-xl font-semibold text-amber-800 mb-1">🧾 Log an expense</h2>
+            <p className="text-xs sm:text-sm text-gray-500 mb-4">
+              Add every food run, Grab ride, or emergency buy — anytime, as it happens.
+            </p>
+            <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-2.5 mb-3 space-y-1">
+              <p><strong>Not sure which category?</strong> Food = meals/groceries · Transport = fare/gas/parking · Shopping = clothes/gadgets/non-essentials · Bills = recurring subscriptions/utilities not already in your budget · Family = money sent home · Emergency = unexpected/urgent costs · Other = anything else.</p>
+              <p className="text-amber-700">
+                🔒 <strong>No double-counting:</strong> this tracker only counts against your <strong>Wants limit</strong> (above). It never touches the fixed Rent, Food, Transport, Family, Debt, or Personal numbers you entered earlier — those stay separate.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 mb-2">
+              <input
+                type="number"
+                className="w-full sm:w-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                placeholder="₱ amount"
+                value={expAmount}
+                onChange={(e) => setExpAmount(e.target.value)}
+              />
+              <input
+                type="text"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                placeholder="What was it for? e.g. lunch with friends"
+                value={expDesc}
+                onChange={(e) => setExpDesc(e.target.value)}
+              />
+              <select
+                className="w-full sm:w-36 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                value={expCategory}
+                onChange={(e) => setExpCategory(e.target.value)}
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleAddExpense}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition font-medium whitespace-nowrap"
+              >
+                ➕ Add
+              </button>
+            </div>
+            {expError && <p className="text-xs text-red-600 mb-2">{expError}</p>}
+
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4 mb-4">
+              <div className="flex-1 bg-amber-50 rounded-lg p-3 text-center">
+                <div className="text-xs text-amber-700">Spent so far</div>
+                <div className="text-lg font-bold text-amber-800">{peso(totalSpent)}</div>
+              </div>
+              <div className="flex-1 bg-blue-50 rounded-lg p-3 text-center">
+                <div className="text-xs text-blue-700">Wants budget</div>
+                <div className="text-lg font-bold text-blue-700">{peso(budget.wantsLimit)}</div>
+              </div>
+              <div className={`flex-1 rounded-lg p-3 text-center ${wantsRemaining >= 0 ? "bg-green-50" : "bg-red-50"}`}>
+                <div className={`text-xs ${wantsRemaining >= 0 ? "text-green-700" : "text-red-700"}`}>Remaining</div>
+                <div className={`text-lg font-bold ${wantsRemaining >= 0 ? "text-green-700" : "text-red-700"}`}>
+                  {peso(wantsRemaining)}
+                </div>
+              </div>
+            </div>
+            {wantsRemaining < 0 && (
+              <p className="text-sm text-red-600 bg-red-50 rounded-lg p-3 mb-4">
+                ⚠️ You've gone over your wants budget. Ask Budgify below for tips to get back on track.
+              </p>
+            )}
+
+            {expenses.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">No expenses logged yet. Add your first one above! 🧾</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {expenses.map((e) => (
+                  <div key={e.id} className="flex justify-between items-center bg-gray-50 rounded-lg px-3 py-2 text-sm">
+                    <div>
+                      <span className="font-medium text-gray-800">{peso(e.amount)}</span>{" "}
+                      <span className="text-gray-500">· {e.category} · {e.description}</span>
+                      <div className="text-xs text-gray-400">{timeAgo(e.timestamp)}</div>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteExpense(e.id)}
+                      aria-label={`Delete expense ${e.description}`}
+                      className="text-gray-400 hover:text-red-500 transition px-2"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Chat Assistant */}
+        {budget && (
+          <div className="bg-white rounded-xl shadow-md p-4 sm:p-6 mb-6">
+            <h2 className="text-xl font-semibold text-amber-800 mb-2">🧡 Ask Budgify</h2>
+            <p className="text-xs sm:text-sm text-gray-500 mb-4">
+              Try: "I spent ₱180 on lunch", "Can I afford ₱2,500 shoes?", or "How much can I spend per day until payday if I have 10 days left?"
+            </p>
+            <div className="space-y-3 mb-4 max-h-80 overflow-y-auto">
+              {chatLog.length === 0 && (
+                <p className="text-sm text-gray-400 italic">No messages yet — say something! 👋</p>
+              )}
+              {chatLog.map((m, idx) => (
+                <div key={idx} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+                      m.role === "user" ? "bg-amber-600 text-white" : "bg-amber-50 text-gray-800"
+                    }`}
+                  >
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {loading && <div className="text-sm text-gray-400 italic">Budgify is typing...</div>}
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm"
+                placeholder="Type your expense or question..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleChatSend()}
+              />
+              <button
+                onClick={handleChatSend}
+                disabled={loading}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition font-medium disabled:opacity-50"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        )}
+
+        <p className="text-xs text-gray-400 text-center mb-2">
+          Prototype only — nothing is saved, this resets on reload. Built to test if fresh grads actually want AI budgeting help.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label, value, onChange, placeholder, isText, hint,
+}: { label: string; value: string; onChange: (v: string) => void; placeholder: string; isText?: boolean; hint?: string }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <input
+        type={isText ? "text" : "number"}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {hint && <p className="text-xs text-gray-400 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function Row({ label, value, bold, highlight }: { label: string; value: string; bold?: boolean; highlight?: "green" | "blue" | "red" }) {
+  const color = highlight === "green" ? "text-green-600" : highlight === "blue" ? "text-blue-600" : highlight === "red" ? "text-red-600" : "text-gray-800";
+  return (
+    <div className="flex justify-between items-center">
+      <span className={`text-gray-600 ${bold ? "font-medium" : ""}`}>{label}</span>
+      <span className={`${color} ${bold ? "font-bold" : "font-medium"}`}>{value}</span>
+    </div>
+  );
+}
+
+function StatusLine({
+  label, actualPct, idealPct, actualAmt, goodDirection,
+}: { label: string; actualPct: number; idealPct: number; actualAmt: number; goodDirection: "lower" | "higher" }) {
+  const diff = actualPct - idealPct;
+  const within = Math.abs(diff) <= 3;
+  const isGood = within || (goodDirection === "lower" ? diff < 0 : diff > 0);
+
+  let icon = "✅";
+  let verdict = "On track";
+  if (!within) {
+    if (isGood) {
+      icon = "🌟";
+      verdict = goodDirection === "higher" ? "Better than average — nice!" : "Well under the typical limit";
+    } else {
+      icon = "⚠️";
+      verdict = goodDirection === "lower" ? "Higher than typical" : "Lower than typical";
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{icon}</span>
+        <span className="text-sm font-medium text-gray-700">{label}</span>
+      </div>
+      <div className="text-right">
+        <div className="text-sm text-gray-800 font-medium">{peso(actualAmt)}</div>
+        <div className={`text-xs ${isGood || within ? "text-green-600" : "text-amber-600"}`}>{verdict}</div>
+      </div>
+    </div>
+  );
+}
+
+function CompareBar({
+  label, idealPct, actualPct, idealAmt, actualAmt, color,
+}: { label: string; idealPct: number; actualPct: number; idealAmt: number; actualAmt: number; color: "amber" | "blue" | "green" }) {
+  const barColor = color === "amber" ? "bg-amber-500" : color === "blue" ? "bg-blue-500" : "bg-green-500";
+  const trackColor = color === "amber" ? "bg-amber-100" : color === "blue" ? "bg-blue-100" : "bg-green-100";
+  const diff = actualPct - idealPct;
+  return (
+    <div>
+      <div className="flex justify-between text-xs text-gray-600 mb-1">
+        <span className="font-medium">{label}</span>
+        <span>
+          You: <strong>{actualPct}%</strong> ({peso(actualAmt)}) vs. ideal <strong>{idealPct}%</strong> ({peso(idealAmt)})
+          {diff !== 0 && (
+            <span className={diff > 0 ? " text-red-500" : " text-green-600"}>
+              {" "}({diff > 0 ? "+" : ""}{diff}pt)
+            </span>
+          )}
+        </span>
+      </div>
+      <div className={`relative w-full h-3 rounded-full ${trackColor} overflow-hidden`}>
+        <div className={`h-3 rounded-full ${barColor}`} style={{ width: `${Math.min(actualPct, 100)}%` }} />
+        <div
+          className="absolute top-0 h-3 w-0.5 bg-gray-700"
+          style={{ left: `${Math.min(idealPct, 100)}%` }}
+          title={`Ideal: ${idealPct}%`}
+        />
+      </div>
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<App />);
